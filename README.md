@@ -75,3 +75,19 @@ newVersionPlus.showUpdateDialog(
 ```
 
 The option was added so that in the android app you can modify the code of your country, with the variable: `androidPlayStoreCountry`
+
+### Huawei AppGallery
+
+Huawei AppGallery is not supported out of the box. AppGallery's public metadata endpoint now requires a signed `interfaceCode` header that cannot be generated from a standalone client, so there is no reliable way to fetch the store version directly from the device.
+
+The recommended pattern is to use the `ApiVersionSource` strategy and point it at a small backend you control. Your backend can call the official [AppGallery Connect Publishing API](https://developer.huawei.com/consumer/en/doc/AppGallery-connect-References/agcapi-app-info-query-0000001158245301) with your Client ID / Client Secret and return the version in response headers:
+
+```dart
+final newVersion = NewVersionPlus(
+  versionSource: ApiVersionSource(
+    apiUrl: Uri.parse('https://your-backend.example.com/app-version'),
+  ),
+);
+```
+
+Your backend responds with `x-latest-app-version`, `x-force-update`, `x-release-notes`, and `x-store-url` (pointing to `https://appgallery.huawei.com/app/C<id>`). This keeps Huawei credentials off the device and lets the same strategy serve Google Play, App Store, and AppGallery from one place.
