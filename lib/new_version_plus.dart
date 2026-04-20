@@ -43,6 +43,13 @@ class NewVersionPlus {
 
   final VersionSource? versionSource;
 
+  /// An optional value that specifies the numeric Huawei AppGallery app id —
+  /// the digits after the leading "C" in the AppGallery URL
+  /// (e.g. for `appgallery.huawei.com/app/C100000000`, pass `100000000`).
+  /// When set, Android lookups query AppGallery instead of Google Play.
+  /// Useful for Huawei devices that ship without Google Mobile Services.
+  final String? huaweiAppGalleryId;
+
   NewVersionPlus({
     this.androidId,
     this.iOSId,
@@ -51,6 +58,7 @@ class NewVersionPlus {
     this.androidPlayStoreCountry,
     this.androidHtmlReleaseNotes = false,
     this.versionSource,
+    this.huaweiAppGalleryId,
   });
 
   /// This checks the version status, then displays a platform-specific alert
@@ -85,6 +93,9 @@ class NewVersionPlus {
     if (Platform.isIOS) {
       return _getiOSStoreVersion(packageInfo);
     } else if (Platform.isAndroid) {
+      if (huaweiAppGalleryId != null) {
+        return _getHuaweiStoreVersion(packageInfo);
+      }
       return _getAndroidStoreVersion(packageInfo);
     } else {
       debugPrint(
@@ -201,6 +212,81 @@ class NewVersionPlus {
       releaseNotes: androidHtmlReleaseNotes
           ? _parseUnicodeToString(releaseNotes)
           : releaseNotes?.replaceAll(expRemoveSc, '').replaceAll(expRemoveQuote, '"'),
+    );
+  }
+
+  /// Huawei AppGallery info is fetched via the public `uowap` endpoint, which
+  /// returns a JSON payload with the app metadata nested under
+  /// `layoutData[*].dataList[0]`.
+  Future<VersionStatus?> _getHuaweiStoreVersion(PackageInfo packageInfo) async {
+    final id = huaweiAppGalleryId!;
+    final uri = Uri.https(
+      "web-drcn.hispace.dbankcloud.com",
+      "/uowap/index",
+      {
+        "method": "internal.getTabDetail",
+        "serviceType": "20",
+        "reqPageNum": "1",
+        "uri": "app|C$id",
+        "maxResults": "25",
+        "locale": androidPlayStoreCountry ?? "en_US",
+      },
+    );
+
+    http.Response response;
+    try {
+      response = await http.get(uri);
+    } catch (e) {
+      debugPrint('Failed to query Huawei AppGallery\n$e');
+      return null;
+    }
+
+    if (response.statusCode != 200) {
+      debugPrint('Failed to query Huawei AppGallery: ${response.statusCode}');
+      return null;
+    }
+
+    Map<String, dynamic> jsonObj;
+    try {
+      jsonObj = json.decode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('Failed to parse Huawei AppGallery response\n$e');
+      return null;
+    }
+
+    // AppGallery nests the app payload under layoutData[i].dataList[0]; the
+    // index varies by section, so walk defensively until we find versionName.
+    Map<String, dynamic>? app;
+    final layoutData = jsonObj['layoutData'];
+    if (layoutData is List) {
+      for (final section in layoutData) {
+        if (section is! Map) continue;
+        final dataList = section['dataList'];
+        if (dataList is! List || dataList.isEmpty) continue;
+        final first = dataList.first;
+        if (first is Map<String, dynamic> && first['versionName'] is String) {
+          app = first;
+          break;
+        }
+      }
+    }
+
+    if (app == null) {
+      debugPrint("Can't find an app in AppGallery with the id: C$id");
+      return null;
+    }
+
+    final rawStoreVersion = app['versionName'] as String?;
+    if (rawStoreVersion == null || rawStoreVersion.isEmpty) {
+      return null;
+    }
+
+    return VersionStatus(
+      localVersion: _getCleanVersion(packageInfo.version),
+      storeVersion: _getCleanVersion(forceAppVersion ?? rawStoreVersion),
+      originalStoreVersion: forceAppVersion ?? rawStoreVersion,
+      appStoreLink: 'https://appgallery.huawei.com/app/C$id',
+      releaseNotes: app['newFeatures'] as String?,
     );
   }
 
